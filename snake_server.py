@@ -694,7 +694,7 @@ class SnakeServer:
         # Start WebSocket Server
         # Increase ping_timeout to avoid 1011 errors on laggy networks
         async with websockets.serve(self.handler, "0.0.0.0", 8765, ping_interval=20, ping_timeout=60):
-            print("Server started on ws://0.0.0.0:8765")
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Server started on ws://0.0.0.0:8765")
             await self.game_loop()
 
 if __name__ == "__main__":
