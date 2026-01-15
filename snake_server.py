@@ -565,7 +565,7 @@ class SnakeServer:
         current_room = None
         player = None
         
-        print(f"New connection: {player_id}")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] New connection: {player_id}")
         
         try:
             async for message in websocket:
@@ -662,7 +662,7 @@ class SnakeServer:
         finally:
             if current_room and player:
                 current_room.remove_player(player.player_id)
-            print(f"Connection closed: {player_id}")
+            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Connection closed: {player_id}")
 
     async def game_loop(self):
         while True:
