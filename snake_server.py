@@ -36,19 +36,14 @@ class BotPlayer(PlayerState):
         self.current_step = 0
 
     def get_move(self, room):
-        # Calculate state vector
+        # Calculate state vector for AI
         head = self.body[0] if self.body else (0,0)
-        
-        # Map limits
         w, h = MAP_WIDTH, MAP_HEIGHT
         
-        # Danger helper for immediate checks
+        # Helper: Check if point is dangerous (wall or body)
         def is_danger(pt):
             x, y = pt
-            # Wall
             if not (0 <= x < w and 0 <= y < h): return True
-            # Hit body (self or others)?
-            # Simplified: just check occupied_set
             return (x, y) in room.occupied_set
 
         # Current direction
@@ -74,7 +69,7 @@ class BotPlayer(PlayerState):
         pt_u = (hx, hy - 1)
         pt_d = (hx, hy + 1)
         
-        # Ray casting across the row/col to see if any body appears in that direction
+        # Ray casting to detect body across the map
         def check_ray(points):
             for p in points:
                 if p in room.occupied_set and p != head:
@@ -86,14 +81,14 @@ class BotPlayer(PlayerState):
         pts_u = [(hx, i) for i in range(0, hy)]
         pts_d = [(hx, i) for i in range(hy + 1, MAP_HEIGHT)]
 
-        # Food - Find closest
+        # Find closest food
         fx, fy = 0, 0
         if room.food:
              # Manhattan distance
-             head = self.body[0]
-             closest = min(room.food, key=lambda f: abs(f[0]-head[0]) + abs(f[1]-head[1]))
+             closest = min(room.food, key=lambda f: abs(f[0]-hx) + abs(f[1]-hy))
              fx, fy = closest
 
+        # Construct 20-dim state vector
         state = [
              # 1. Danger Body [R, L, U, D]
              int((pt_r) in room.occupied_set), int((pt_l) in room.occupied_set), int((pt_u) in room.occupied_set), int((pt_d) in room.occupied_set),
@@ -116,24 +111,18 @@ class BotPlayer(PlayerState):
         
         state_t = torch.tensor(np.array(state, dtype=int), dtype=torch.float)
         
-        # Predict
         with torch.no_grad():
              prediction = self.model(state_t)
         
         move_idx = torch.argmax(prediction).item()
         
-        # 0: Straight, 1: Right turn, 2: Left turn (relative to current dir)
-        try:
-            curr_idx = clock_wise.index(self.direction)
-        except:
-            curr_idx = 0
-            
-        if move_idx == 0: # Straight
-            new_dir = clock_wise[curr_idx]
-        elif move_idx == 1: # Right (Turn Clockwise)
-            new_dir = clock_wise[(curr_idx + 1) % 4]
-        else: # Left (Turn Counter-Clockwise)
-            new_dir = clock_wise[(curr_idx - 1) % 4]
+        # 0: Straight, 1: Right turn, 2: Left turn
+        if move_idx == 0:
+            new_dir = clock_wise[idx]
+        elif move_idx == 1:
+            new_dir = clock_wise[(idx + 1) % 4]
+        else:
+            new_dir = clock_wise[(idx - 1) % 4]
             
         self.direction = new_dir
 
@@ -146,7 +135,7 @@ class Room:
         self.host_id = None
         
         # Game State
-        self.food = [] # List of tuples
+        self.food = []
         self.occupied_set = set() # All snake bodies
         self.tick_id = 0
         self.start_time = 0
@@ -154,35 +143,22 @@ class Room:
         
         # Auto-start logic
         self.countdown_deadline = None
-        
         self.pending_deaths = set()
 
     async def _safe_send(self, ws, msg):
         try:
             await ws.send(msg)
         except Exception:
-            # Connection likely closed or timed out
             pass
 
     def broadcast(self, message):
-        # We will broadcast to everyone connected, even if dead
         for p in self.players.values():
             if p.connected and p.websocket:
-                # Use _safe_send to catch exceptions inside the task
                 asyncio.create_task(self._safe_send(p.websocket, json.dumps(message)))
 
     def add_player(self, player):
         if len(self.players) >= self.capacity:
             return False, "ROOM_FULL"
-        # ALLOW Join during RUNNING for Spectator
-        # if self.status == "RUNNING":
-        #    return False, "ROOM_LOCKED"
-            
-        # Limit humans to 4
-        if not getattr(player, 'is_bot', False):
-             humans = sum(1 for p in self.players.values() if not getattr(p, 'is_bot', False))
-             if humans >= 4:
-                 return False, "ROOM_FULL_HUMANS"
         
         # Spectator logic: If running, they join as dead
         if self.status == "RUNNING":
@@ -190,7 +166,7 @@ class Room:
         
         self.players[player.player_id] = player
         
-        # First player becomes host for manual start
+        # First player becomes host
         if self.host_id is None:
             self.host_id = player.player_id
             
@@ -203,8 +179,7 @@ class Room:
         if player_id in self.players:
             p = self.players[player_id]
             p.connected = False
-            # We don't remove from dict immediately during game to keep history/score?
-            # Spec says: if WAITING remove. If RUNNING treat as death.
+            
             if self.status == "WAITING":
                 del self.players[player_id]
                 if self.host_id == player_id:
@@ -233,14 +208,6 @@ class Room:
             y = random.randint(0, MAP_HEIGHT - 1)
             if (x, y) not in self.occupied_set and (x, y) not in self.food:
                 self.food.append((x, y))
-        
-        # Fallback if map super full (unlikely)
-        
-        # Fallback linear search - Removed for multi-food
-        pass
-        
-        # Should not happen unless map full
-        # self.food = None # REMOVED: Do not reset to None!
 
     def start_game(self, reason):
         print(f"Room {self.room_id} starting: {reason}")
@@ -249,23 +216,18 @@ class Room:
         self.start_time = time.time()
         self.death_order = []
         self.occupied_set = set()
-        self.pending_deaths.clear() # Clear pending deaths from previous session to avoid KeyError
+        self.pending_deaths.clear()
         
-        # Initialize Snakes
-        # Simple spawn strategy: Random positions, length 3
-        spawn_info = []
-        
-        # PRUNE DISCONNECTED PLAYERS before spawning
-        # Prevent Zombies/Ghosts
+        # Prune disconnected players
         to_remove = [pid for pid, p in self.players.items() if not p.connected and not getattr(p, 'is_bot', False)]
         for pid in to_remove:
             print(f"Pruning disconnected player {pid} from Room {self.room_id}")
             del self.players[pid]
-            # Also remove from death_order if present to clean up? Not needed as death_order is reset below.
         
+        # Initialize Snakes
+        spawn_info = []
         for p in self.players.values():
             p.alive = True
-            # p.score = 0  <-- REMOVED: Score persists
             p.body.clear()
             p.body_set.clear()
             
@@ -274,10 +236,11 @@ class Room:
             for _ in range(100):
                 sx = random.randint(2, MAP_WIDTH - 3)
                 sy = random.randint(2, MAP_HEIGHT - 3)
+                
                 # Check collision with others
                 collides = False
                 for other in self.players.values():
-                    if (sx, sy) in other.body_set: # unlikely as they are empty
+                    if (sx, sy) in other.body_set:
                         collides = True
                 if not collides:
                     start_body = [(sx, sy), (sx-1, sy), (sx-2, sy)]
@@ -296,16 +259,15 @@ class Room:
             if not found:
                 p.alive = False # Could not spawn
         
-        self.food = [] # List of tuples
+        self.food = []
         self.spawn_food()
         
-        msg = {
+        self.broadcast({
             "t": MSG_GAME_START,
             "tick_id": 0,
             "food": self.food,
             "players": spawn_info
-        }
-        self.broadcast(msg)
+        })
 
     def step(self):
         if self.status != "RUNNING":
@@ -313,52 +275,29 @@ class Room:
             
         self.tick_id += 1
         moves = []
-        
-        # 1. Update intended direction
         alive_players = [p for p in self.players.values() if p.alive]
         
-        # If <= 1 alive, Game Over
-        if len(alive_players) <= 1 and len(self.players) > 1:
-             # Actually spec says: if RUNNING and alive_count <= 1 -> end game.
-             # But if only 1 player started? 
-             # Let's assume >1 start requirement.
-             pass 
-
         if not alive_players:
             self.end_game()
             return
         
-        # Bot Logic: Update Directions
+        # Bot Logic
         for p in alive_players:
             if hasattr(p, 'is_bot') and p.is_bot:
                 p.get_move(self)
                 
-        # Check Human Count
+        # Check counts for Game Over logic
         human_alive_count = sum(1 for p in alive_players if not getattr(p, 'is_bot', False))
         human_total_count = sum(1 for p in self.players.values() if not getattr(p, 'is_bot', False))
         
-        # If humans were present but all died -> Pause (or End)
-        # Spec request: "If all human users died, then the game pause."
-        if human_total_count > 0 and human_alive_count == 0:
-             # We pause the game to let them see the score
-             # But keep sending broadcasts?
-             # Let's transition to a FINISHED state which effectively pauses tick logic
-             # but we can call it "PAUSED" if we want resumption.
-             # Use FINISHED for now to show Game Over screen.
-             self.end_game()
-             return
-
-        # Check Total Alive
-        # New Logic:
-        # If humans are involved, wait until ALL humans are dead.
-        # If only bots, standard rule (<=1).
-        
+        # Game Over Condition: 
+        # 1. If humans connected: Wait until ALL humans dead.
+        # 2. If bots only: Wait until <= 1 survivor.
         if human_total_count > 0:
             if human_alive_count == 0:
                 self.end_game()
                 return
         else:
-            # Bot only match?
             if len(alive_players) <= 1 and len(self.players) >= 2:
                 self.end_game()
                 return
@@ -367,18 +306,11 @@ class Room:
         snake_intents = {} # pid -> {next_head, will_grow, tail_to_free}
         
         for p in alive_players:
-            # Apply pending direction if any
-            # (In a real system we might process input queue here)
-            
             dx, dy = p.direction
             hx, hy = p.body[0]
             nx, ny = hx + dx, hy + dy
             
-            # Check Food
-            will_grow = False
-            if (nx, ny) in self.food:
-                 will_grow = True
-            
+            will_grow = (nx, ny) in self.food
             tail_to_free = p.body[-1] if not will_grow else None
             
             snake_intents[p.player_id] = {
@@ -388,19 +320,15 @@ class Room:
             }
             
         # Phase 2: Decide Deaths
-        # occupied_now is self.occupied_set
         tails_to_free = set()
         for info in snake_intents.values():
             if info["tail_to_free"]:
                 tails_to_free.add(info["tail_to_free"])
                 
         dying_ids = set()
-        
-        # Process Pending Deaths (Disconnects)
         dying_ids.update(self.pending_deaths)
         self.pending_deaths.clear()
         
-        # Check bounds & collisions
         for p in alive_players:
             intent = snake_intents[p.player_id]
             nx, ny = intent["next_head"]
@@ -434,7 +362,6 @@ class Room:
             intent = snake_intents[p.player_id]
             nx, ny = intent["next_head"]
             
-            # Update data
             p.body.appendleft((nx, ny))
             p.body_set.add((nx, ny))
             self.occupied_set.add((nx, ny))
@@ -444,22 +371,20 @@ class Room:
             
             if not intent["will_grow"]:
                 tx, ty = p.body.pop()
+                # Handled Chasing Tail case:
+                # If head matches old tail pos, do NOT remove from set.
                 if (tx, ty) != (nx, ny):
                     if (tx, ty) in p.body_set:
                         p.body_set.remove((tx, ty))
-                    # Safe removal deferred to below
                     tail_remove = (tx, ty)
                 else:
-                    # Head chased tail (cycle). Do NOT remove from set (it's the head now)
                     tail_remove = None
             
-            # Apply tail removal to occupied_set SAFELY
             if tail_remove:
                  self.occupied_set.discard(tail_remove)
             else:
                 p.score += 1
                 food_eaten = True
-                # Remove specific food
                 if (nx, ny) in self.food:
                     self.food.remove((nx, ny))
                 
@@ -477,10 +402,9 @@ class Room:
                 continue
             p = self.players[pid]
             p.alive = False
-            p.score = max(0, p.score // 2) # Halve score on death, ensure >= 0
+            p.score = max(0, p.score // 2)
             self.death_order.append(pid)
             
-            # Remove body
             for cell in p.body:
                  self.occupied_set.discard(cell)
             p.body.clear()
@@ -495,23 +419,19 @@ class Room:
         if food_eaten:
             self.spawn_food()
             
-        # Broadcast Delta
-        msg = {
+        self.broadcast({
             "t": MSG_DELTA,
             "tick": self.tick_id,
             "moves": moves,
             "food": self.food
-        }
-        self.broadcast(msg)
+        })
 
     def end_game(self):
         self.status = "FINISHED"
         
         # Ranking
-        sorted_players = []
-        # Winner (if any alive)
         alive = [p for p in self.players.values() if p.alive]
-        dead = [self.players[pid] for pid in reversed(self.death_order) if pid in self.players] # Last died first
+        dead = [self.players[pid] for pid in reversed(self.death_order) if pid in self.players]
         
         rank = 1
         ranks = []
@@ -526,19 +446,17 @@ class Room:
             ranks.append({"id": p.player_id, "rank": rank, "score": p.score})
             rank += 1
             
-        msg = {
+        self.broadcast({
             "t": MSG_GAME_OVER,
             "ranks": ranks,
             "winner_id": winner_id,
             "ended_tick": self.tick_id
-        }
-        self.broadcast(msg)
+        })
         
-        # Reset to Waiting
-        # In real detailed logic, check if players remaining.
         self.status = "WAITING"
-        self.host_id = None # Reset host or keep?
-        # Re-elect host
+        self.host_id = None
+        
+        # Re-elect host from connected players
         connected = [p for p in self.players.values() if p.connected]
         if connected:
             self.host_id = connected[0].player_id
@@ -549,14 +467,11 @@ class Room:
 
 class SnakeServer:
     def __init__(self):
-        self.rooms = {} # id -> Room
+        self.rooms = {}
         
         # Load Model
         self.model = Linear_QNet(20, 128, 3)
         try:
-            if torch.cuda.is_available():
-                 # We prefer CPU for inference server if not heavy, but let's follow user pref or auto
-                 pass
             self.model.load_state_dict(torch.load('./model/model.pth', map_location='cpu'))
             self.model.eval()
             print("Loaded AI Model")
@@ -565,8 +480,6 @@ class SnakeServer:
             
         for i in range(ROOM_COUNT):
             rid = f"room-{i+1}"
-            self.rooms[rid] = Room(rid)
-            
             self.rooms[rid] = Room(rid)
             
             # Auto-add bot to EVERY Room
@@ -589,12 +502,9 @@ class SnakeServer:
                 
                 if mtype == MSG_JOIN:
                     rid = data.get("room_id")
-                    username = data.get("username", "Guest")
-                    username = username[:10] # Limit length
+                    username = data.get("username", "Guest")[:10]
                     
                     if rid not in self.rooms:
-                        # Auto assign? Or Error?
-                        # Let's say we pick first available if not found
                         await websocket.send(json.dumps({"t": MSG_ERROR, "code": "ROOM_NOT_FOUND"}))
                         continue
                         
@@ -606,7 +516,6 @@ class SnakeServer:
                         current_room = room
                         self.players[websocket] = player
                         
-                        # Send Join OK
                         plist = [{"id": p.player_id, "name": p.username} for p in room.players.values()]
                         resp = {
                             "t": MSG_JOIN_OK,
@@ -617,7 +526,6 @@ class SnakeServer:
                             "your_id": player_id
                         }
                         
-                        # Snapshot if Running
                         if room.status == "RUNNING":
                             snapshot_snakes = {}
                             for p in room.players.values():
@@ -634,19 +542,15 @@ class SnakeServer:
                             }
 
                         await websocket.send(json.dumps(resp))
-                        
-                        # Notify others? (Not strictly in spec but good for UI)
                     else:
                         await websocket.send(json.dumps({"t": MSG_ERROR, "code": err}))
                 
                 elif mtype == MSG_INPUT:
                     if player and current_room and player.alive:
                         d_str = data.get("d")
-                        # d_str: 0=Up, 1=Down, 2=Left, 3=Right (Just mapping for simplicity or string)
-                        # Spec says "U", "D"... but let's stick to logic
-                        # 'up', 'down', 'left', 'right'
+                        # 0=Up, 1=Down, 2=Left, 3=Right
                         
-                        # Prevent 180 reverse
+                        # Prevent 180 degree reverse
                         old_dir = player.direction
                         new_dir = None
                         if d_str == 'up' and old_dir != (0, 1): new_dir = (0, -1)
@@ -663,14 +567,12 @@ class SnakeServer:
                         if len(current_room.players) >= 2:
                             current_room.start_game("MANUAL")
                         else:
-                            # Allow 1 player start for debugging?
-                            # Spec says >= 2. But for testing let's allow 1 if DEBUG
+                            # Allow 1 player start for debugging
                             current_room.start_game("MANUAL_DEBUG")
 
                 elif mtype == MSG_EXIT:
-                    # Explicit Exit
                     print(f"Explicit exit from {player_id}")
-                    break # Will trigger finally block cleanup
+                    break 
 
         except websockets.exceptions.ConnectionClosed:
             pass
@@ -686,17 +588,15 @@ class SnakeServer:
             for room in self.rooms.values():
                 # Auto Start Logic
                 if room.status == "WAITING":
-                    # Check capacity
                     if len(room.players) >= room.capacity:
                         room.start_game("REF_FULL")
                     elif len(room.players) >= 2:
                          if room.countdown_deadline is None:
                              room.countdown_deadline = time.time() + 5
-                             # Notify countdown?
                          elif time.time() >= room.countdown_deadline:
                              room.start_game("COUNTDOWN")
                     else:
-                        room.countdown_deadline = None # Reset if dropped below 2
+                        room.countdown_deadline = None
                 
                 elif room.status == "RUNNING":
                     room.step()
@@ -718,5 +618,3 @@ if __name__ == "__main__":
         asyncio.run(server.start())
     except KeyboardInterrupt:
         print("Server stopped.")
-
-
