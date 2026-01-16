@@ -5,10 +5,9 @@ CELL_SIZE = 20
 
 # Game Settings
 ROOM_COUNT = 20
-ROOM_CAPACITY = 5
+ROOM_CAPACITY = 10
 SERVER_MAX_PLAYERS = ROOM_COUNT * ROOM_CAPACITY
-SIM_TICK_HZ = 20
-BROADCAST_HZ = SIM_TICK_HZ * 3
+SIM_TICK_HZ = 15
 TICK_DT_MS = 1000 / SIM_TICK_HZ
 
 # Protocol Opcodes / Types
@@ -19,6 +18,4 @@ MSG_GAME_START = "game_start"
 MSG_DELTA = "d"
 MSG_GAME_OVER = "game_over"
 MSG_ERROR = "err"
-MSG_PING = "ping"
-MSG_PONG = "pong"
 MSG_EXIT = "exit"
