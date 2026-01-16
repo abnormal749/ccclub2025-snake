@@ -318,7 +318,7 @@ class Room:
         alive_players = [p for p in self.players.values() if p.alive]
         
         # If <= 1 alive, Game Over
-        if len(alive_players) <= 1 and len(self.players) > 1: # Single player mode allowed?
+        if len(alive_players) <= 1 and len(self.players) > 1:
              # Actually spec says: if RUNNING and alive_count <= 1 -> end game.
              # But if only 1 player started? 
              # Let's assume >1 start requirement.
@@ -349,9 +349,19 @@ class Room:
              return
 
         # Check Total Alive
-        if len(alive_players) <= 1 and len(self.players) >= 2:
-             self.end_game()
-             return
+        # New Logic:
+        # If humans are involved, wait until ALL humans are dead.
+        # If only bots, standard rule (<=1).
+        
+        if human_total_count > 0:
+            if human_alive_count == 0:
+                self.end_game()
+                return
+        else:
+            # Bot only match?
+            if len(alive_players) <= 1 and len(self.players) >= 2:
+                self.end_game()
+                return
 
         # Phase 1: Calculate Intent
         snake_intents = {} # pid -> {next_head, will_grow, tail_to_free}
@@ -434,9 +444,14 @@ class Room:
             
             if not intent["will_grow"]:
                 tx, ty = p.body.pop()
-                p.body_set.remove((tx, ty))
-                # Safe removal deferred to below
-                tail_remove = (tx, ty)
+                if (tx, ty) != (nx, ny):
+                    if (tx, ty) in p.body_set:
+                        p.body_set.remove((tx, ty))
+                    # Safe removal deferred to below
+                    tail_remove = (tx, ty)
+                else:
+                    # Head chased tail (cycle). Do NOT remove from set (it's the head now)
+                    tail_remove = None
             
             # Apply tail removal to occupied_set SAFELY
             if tail_remove:
@@ -703,4 +718,5 @@ if __name__ == "__main__":
         asyncio.run(server.start())
     except KeyboardInterrupt:
         print("Server stopped.")
+
 
