@@ -493,7 +493,7 @@ class SnakeServer:
         current_room = None
         player = None
         
-        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] New connection: {player_id}")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] New connection: {websocket.remote_address[0] if websocket.remote_address else 'unknown'}({player_id})")
         
         try:
             async for message in websocket:
