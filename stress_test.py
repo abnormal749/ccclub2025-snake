@@ -2,9 +2,8 @@ import asyncio
 import websockets
 import json
 import random
-import uuid
 import argparse
-import signal  # NEW
+import signal
 from snake_protocol import *
 
 SERVER_IP = "127.0.0.1"
@@ -12,7 +11,8 @@ SERVER_IP = "127.0.0.1"
 async def stress_client(client_id, server_uri, room_id):
     while True:
         try:
-            async with websockets.connect(server_uri, close_timeout=0.2) as websocket:  # NEW (可選但很有用)
+            # close_timeout=0.2 helps to speed up retry loops if server is unresponsive
+            async with websockets.connect(server_uri, close_timeout=0.2) as websocket:
                 # Join
                 msg = {
                     "t": MSG_JOIN,
@@ -29,7 +29,7 @@ async def stress_client(client_id, server_uri, room_id):
                 async def reader():
                     try:
                         async for _ in websocket:
-                            pass
+                            pass # Drain messages
                     except Exception:
                         pass
 
@@ -54,8 +54,7 @@ async def stress_client(client_id, server_uri, room_id):
             await asyncio.sleep(1)
         except asyncio.CancelledError:
             return
-        except Exception as e:
-            # print(f"Client {client_id} error: {e}")
+        except Exception:
             await asyncio.sleep(1)
 
 async def main():
@@ -71,7 +70,7 @@ async def main():
         rid = f"room-{random.randint(1, 20)}"
         tasks.append(asyncio.create_task(stress_client(i, args.uri, rid)))
 
-    # NEW: Ctrl+C 立刻印訊息 + 取消 tasks，並攔截第二次 Ctrl+C
+    # Ctrl+C 立刻印訊息 + 取消 tasks，並攔截第二次 Ctrl+C
     loop = asyncio.get_running_loop()
     shutting_down = False
 
