@@ -58,11 +58,14 @@ async def stress_client(client_id, server_uri, room_id):
 
                 async def writer():
                     directions = ['up', 'down', 'left', 'right']
-                    while True:
-                        d = random.choice(directions)
-                        input_msg = {"t": MSG_INPUT, "d": d}
-                        await websocket.send(json.dumps(input_msg))
-                        await asyncio.sleep(0.1)  # Send at ~10Hz
+                    try:
+                        while True:
+                            d = random.choice(directions)
+                            input_msg = {"t": MSG_INPUT, "d": d}
+                            await websocket.send(json.dumps(input_msg))
+                            await asyncio.sleep(0.1)  # Send at ~10Hz
+                    except Exception:
+                        pass
 
                 # Run both until one fails (likely connection closed)
                 done, pending = await asyncio.wait(
