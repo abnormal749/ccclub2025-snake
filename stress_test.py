@@ -4,6 +4,7 @@ import json
 import random
 import argparse
 import signal
+import time
 from snake_protocol import *
 
 SERVER_IP = "127.0.0.1"
@@ -27,11 +28,33 @@ async def stress_client(client_id, server_uri, room_id):
                 # Split Input (Writer) and Output (Reader) to avoid blocking Pings/receiving
                 
                 async def reader():
+                    expected_interval = 1.0 / SIM_TICK_HZ  # e.g. 0.0666s
+                    last_time = None
+                    jitter_sum = 0.0
+                    jitter_count = 0
+                    
                     try:
-                        async for _ in websocket:
-                            pass # Drain messages
+                        async for message in websocket:
+                            arrival_time = time.time()
+                            
+                            # Passive measurement: the server sends MSG_DELTA regularly.
+                            if last_time is not None:
+                                delta = arrival_time - last_time
+                                jitter = abs(delta - expected_interval)
+                                
+                                jitter_sum += jitter
+                                jitter_count += 1
+                                
+                            last_time = arrival_time
                     except Exception:
                         pass
+                    finally:
+                        # Report on exit
+                        if jitter_count > 0:
+                            avg_jitter_ms = (jitter_sum / jitter_count) * 1000.0
+                            print(f"[Client {client_id}] Connection Closed. Avg Jitter: {avg_jitter_ms:.2f} ms ({jitter_count} pkts)")
+                        else:
+                            print(f"[Client {client_id}] Connection Closed. No packets for jitter calc.")
 
                 async def writer():
                     directions = ['up', 'down', 'left', 'right']
