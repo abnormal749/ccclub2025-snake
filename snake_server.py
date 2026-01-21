@@ -27,6 +27,7 @@ class PlayerState:
         self.last_seen_ts = time.time()
         self.pending_direction = None
         self.is_bot = False
+        self.eliminated = False
 
 class BotPlayer(PlayerState):
     def __init__(self, player_id, model):
@@ -169,7 +170,17 @@ class Room:
         # First player becomes host
         if self.host_id is None:
             self.host_id = player.player_id
-            
+        
+        # 玩家加入時，讓其中一個 AI 觀戰
+        if not getattr(player, 'is_bot', False):
+            human_count = sum(1 for p in self.players.values() if not getattr(p, 'is_bot', False))
+            if human_count <= 4 and self.status == "WAITING":
+                active_bots = [p for p in self.players.values() if getattr(p, 'is_bot', False) and p.alive]
+                while len(active_bots) > 1:
+                    bot = active_bots.pop()
+                    bot.alive = False
+                    print(f"Bot {bot.player_id} benched, human joined")
+
         if self.status == "IDLE":
             self.status = "WAITING"
             
@@ -211,6 +222,26 @@ class Room:
 
     def start_game(self, reason):
         print(f"Room {self.room_id} starting: {reason}")
+        
+        # 復活所有真人玩家
+        for p in self.players.values():
+            p.eliminated = False
+            if not getattr(p, 'is_bot', False):
+                p.alive = True
+
+        # 根據真人數量調整 AI
+        human_count = sum(1 for p in self.players.values() 
+                          if not getattr(p, 'is_bot', False) and p.connected)
+        bots = [p for p in self.players.values() if getattr(p, 'is_bot', False)]
+        
+        target_bots = max(0, min(2, 2 - human_count))
+        
+        for i, bot in enumerate(bots):
+            if i < target_bots:
+                bot.alive = True
+            else:
+                bot.alive = False
+
         self.status = "RUNNING"
         self.tick_id = 0
         self.start_time = time.time()
@@ -227,7 +258,8 @@ class Room:
         # Initialize Snakes
         spawn_info = []
         for p in self.players.values():
-            p.alive = True
+            if not p.alive:
+                continue
             p.body.clear()
             p.body_set.clear()
             
@@ -291,16 +323,13 @@ class Room:
         human_total_count = sum(1 for p in self.players.values() if not getattr(p, 'is_bot', False))
         
         # Game Over Condition: 
-        # 1. If humans connected: Wait until ALL humans dead.
-        # 2. If bots only: Wait until <= 1 survivor.
-        if human_total_count > 0:
-            if human_alive_count == 0:
-                self.end_game()
-                return
-        else:
-            if len(alive_players) <= 1 and len(self.players) >= 2:
-                self.end_game()
-                return
+        # 結束條件：(存活者 <= 1) AND (沒有候補 AI 了)
+        # 候補 AI 定義：是 Bot，且不活著，且沒有被淘汰
+        benched_bots = [p for p in self.players.values() if getattr(p, 'is_bot', False) and not p.alive and not p.eliminated]
+        
+        if len(alive_players) <= 1 and len(benched_bots) == 0 and len(self.players) >= 2:
+            self.end_game()
+            return
 
         # Phase 1: Calculate Intent
         snake_intents = {} # pid -> {next_head, will_grow, tail_to_free}
@@ -326,6 +355,8 @@ class Room:
                 tails_to_free.add(info["tail_to_free"])
                 
         dying_ids = set()
+        death_reasons = {} # pid -> reason string
+        
         dying_ids.update(self.pending_deaths)
         self.pending_deaths.clear()
         
@@ -336,12 +367,14 @@ class Room:
             # Wall
             if not (0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT):
                 dying_ids.add(p.player_id)
+                death_reasons[p.player_id] = "wall"
                 continue
                 
             # Body collision
             if (nx, ny) in self.occupied_set:
                 if (nx, ny) not in tails_to_free:
                     dying_ids.add(p.player_id)
+                    death_reasons[p.player_id] = "body"
                     continue
             
             # Head-to-Head
@@ -351,6 +384,8 @@ class Room:
                 if other_intent["next_head"] == (nx, ny):
                     dying_ids.add(p.player_id)
                     dying_ids.add(other.player_id)
+                    death_reasons[p.player_id] = "head-on"
+                    death_reasons[other.player_id] = "head-on"
         
         food_eaten = False
         
@@ -402,6 +437,7 @@ class Room:
                 continue
             p = self.players[pid]
             p.alive = False
+            p.eliminated = True
             p.score = max(0, p.score // 2)
             self.death_order.append(pid)
             
@@ -413,8 +449,56 @@ class Room:
             moves.append({
                 "id": pid,
                 "dead": True,
-                "reason": "collision"
+                "reason": death_reasons.get(pid, "collision")
             })
+
+            # 真人死亡，恢復觀戰的 AI
+            if not getattr(p, 'is_bot', False):
+                alive_humans = sum(1 for p in self.players.values() 
+                                   if not getattr(p, 'is_bot', False) and p.alive)
+                benched_bots = [p for p in self.players.values() 
+                                if getattr(p, 'is_bot', False) and not p.alive and not p.eliminated]
+                
+                if alive_humans == 0 and benched_bots:
+                    bot = benched_bots[0]
+                    bot.alive = True
+                    
+                    # 生成蛇身
+                    found = False
+                    for _ in range(100):
+                        sx = random.randint(2, MAP_WIDTH - 3)
+                        sy = random.randint(2, MAP_HEIGHT - 3)
+                        
+                        # 檢查碰撞
+                        collides = False
+                        for other in self.players.values():
+                            if (sx, sy) in other.body_set:
+                                collides = True
+                                break
+                        
+                        if not collides:
+                            start_body = [(sx, sy), (sx-1, sy), (sx-2, sy)]
+                            bot.body = deque(start_body)
+                            bot.body_set = set(start_body)
+                            bot.direction = (1, 0)
+                            self.occupied_set.update(start_body)
+                            
+                            # 發送 delta 通知 bot 復活
+                            moves.append({
+                                "id": bot.player_id,
+                                "head_add": start_body[0],
+                                "tail_remove": None,
+                                "score": bot.score,
+                                "alive": True,
+                                "revived": True
+                            })
+                            
+                            print(f"✅ Bot {bot.player_id} revived!")
+                            found = True
+                            break
+                    
+                    if not found:
+                        print(f"Could not spawn bot {bot.player_id}")
             
         if food_eaten:
             self.spawn_food()
@@ -453,8 +537,9 @@ class Room:
             "ended_tick": self.tick_id
         })
         
-        self.status = "WAITING"
+        self.status = "IDLE"
         self.host_id = None
+        self.countdown_deadline = None
         
         # Re-elect host from connected players
         connected = [p for p in self.players.values() if p.connected]
@@ -482,9 +567,10 @@ class SnakeServer:
             rid = f"room-{i+1}"
             self.rooms[rid] = Room(rid)
             
-            # Auto-add bot to EVERY Room
-            bot = BotPlayer(f"bot_{i}", self.model)
-            self.rooms[rid].add_player(bot)
+            # Auto-add bots to EVERY Room
+            for bot_idx in range(2):
+                bot = BotPlayer(f"bot_{i}_{bot_idx}", self.model)
+                self.rooms[rid].add_player(bot)
         
         self.players = {} # ws -> PlayerState
 
@@ -588,13 +674,16 @@ class SnakeServer:
             for room in self.rooms.values():
                 # Auto Start Logic
                 if room.status == "WAITING":
-                    if len(room.players) >= room.capacity:
-                        room.start_game("REF_FULL")
-                    elif len(room.players) >= 2:
-                         if room.countdown_deadline is None:
-                             room.countdown_deadline = time.time() + 5
-                         elif time.time() >= room.countdown_deadline:
-                             room.start_game("COUNTDOWN")
+                    human_count = sum(1 for p in room.players.values() if not getattr(p, 'is_bot', False))
+                    
+                    if human_count > 0:
+                        if len(room.players) >= room.capacity:
+                            room.start_game("REF_FULL")
+                        elif len(room.players) >= 2:
+                            if room.countdown_deadline is None:
+                                room.countdown_deadline = time.time() + 5
+                            elif time.time() >= room.countdown_deadline:
+                                room.start_game("COUNTDOWN")
                     else:
                         room.countdown_deadline = None
                 
