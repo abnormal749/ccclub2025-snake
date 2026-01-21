@@ -679,11 +679,15 @@ class SnakeServer:
                     if human_count > 0:
                         if len(room.players) >= room.capacity:
                             room.start_game("REF_FULL")
+                            # 讓玩家有準備時間
+                            await asyncio.sleep(0.8)
                         elif len(room.players) >= 2:
                             if room.countdown_deadline is None:
                                 room.countdown_deadline = time.time() + 5
                             elif time.time() >= room.countdown_deadline:
                                 room.start_game("COUNTDOWN")
+                                # 讓玩家有準備時間
+                                await asyncio.sleep(0.8)
                     else:
                         room.countdown_deadline = None
                 
