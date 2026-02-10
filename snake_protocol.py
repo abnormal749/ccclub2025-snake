@@ -19,3 +19,7 @@ MSG_DELTA = "d"
 MSG_GAME_OVER = "game_over"
 MSG_ERROR = "err"
 MSG_EXIT = "exit"
+
+# Room Stats API
+MSG_ROOM_STATS_REQ = "room_stats_req"
+MSG_ROOM_STATS = "room_stats"

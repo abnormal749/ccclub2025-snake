@@ -43,3 +43,19 @@
 
 - `--room-count`：隨機房間範圍（預設 `20`）
 - `--input-hz`：每個壓測客戶端送輸入頻率（預設 `10`）
+
+## 房間人數 API（WebSocket）
+
+可在尚未 `join` 房間前直接查詢所有房間目前人數。
+
+- 請求：`{"t":"room_stats_req"}`
+- 回應：`{"t":"room_stats","rooms":[...]}`
+
+`rooms` 內每個物件欄位：
+
+- `room_id`：房間 ID（例如 `room-1`）
+- `status`：`IDLE / WAITING / RUNNING / FINISHED`
+- `connected_players`：目前連線中的玩家數（僅計入可計數玩家）
+- `used_slots`：目前占用名額（與 server `ROOM_FULL` 判斷一致）
+- `capacity`：房間上限
+- `available_slots`：剩餘可加入名額

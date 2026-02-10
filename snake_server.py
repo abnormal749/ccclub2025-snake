@@ -630,6 +630,22 @@ class SnakeServer:
         
         self.players = {} # ws -> PlayerState
 
+    def get_room_stats(self):
+        stats = []
+        for rid, room in self.rooms.items():
+            counted = room.counted_players()
+            used_slots = len(counted)
+            connected_players = sum(1 for p in counted if p.connected)
+            stats.append({
+                "room_id": rid,
+                "status": room.status,
+                "connected_players": connected_players,
+                "used_slots": used_slots,
+                "capacity": room.capacity,
+                "available_slots": max(0, room.capacity - used_slots)
+            })
+        return stats
+
     async def handler(self, websocket):
         player_id = str(uuid.uuid4())[:8]
         current_room = None
@@ -641,6 +657,13 @@ class SnakeServer:
             async for message in websocket:
                 data = json.loads(message)
                 mtype = data.get("t")
+
+                if mtype == MSG_ROOM_STATS_REQ:
+                    await websocket.send(json.dumps({
+                        "t": MSG_ROOM_STATS,
+                        "rooms": self.get_room_stats()
+                    }))
+                    continue
                 
                 if mtype == MSG_JOIN:
                     rid = data.get("room_id")
