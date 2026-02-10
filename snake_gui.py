@@ -157,7 +157,9 @@ class NetworkGame:
                 self.screen.blit(btn_txt, (btn_rect.x + 30, btn_rect.y + 10))
                 
                 info = self.font.render("Waiting... Press START or SPACE", True, (255, 255, 0))
-                self.screen.blit(info, (SCREEN_WIDTH//2 - 120, SCREEN_HEIGHT//2))
+                self.screen.blit(info, (SCREEN_WIDTH//2 - 170, SCREEN_HEIGHT//2))
+                delay_hint = self.font.render("Game starts about 5 seconds after start request", True, (255, 220, 120))
+                self.screen.blit(delay_hint, (SCREEN_WIDTH//2 - 250, SCREEN_HEIGHT//2 + 30))
                 
             elif status == "FINISHED":
                 if state.get("winner"):
@@ -226,4 +228,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

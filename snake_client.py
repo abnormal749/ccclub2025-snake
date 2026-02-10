@@ -142,11 +142,29 @@ class SnakeClient:
                         continue
                         
                     if pid not in self.snakes:
-                         # Should have been in start, but maybe joined late?
-                         # Spec says no mid-game join.
+                         # A benched bot can be revived mid-game.
+                         if m.get("revived"):
+                             revived_body = m.get("body")
+                             if revived_body:
+                                 body = deque([tuple(c) for c in revived_body])
+                             else:
+                                 body = deque([tuple(m["head_add"])])
+                             self.snakes[pid] = {
+                                 "body": body,
+                                 "name": m.get("name", pid),
+                                 "alive": True,
+                                 "score": m.get("score", 0)
+                             }
                          continue
                          
                     snake = self.snakes[pid]
+                    if m.get("revived") and m.get("body"):
+                        snake["body"] = deque([tuple(c) for c in m["body"]])
+                        snake["alive"] = True
+                        snake["name"] = m.get("name", snake.get("name", pid))
+                        snake["score"] = m.get("score", snake.get("score", 0))
+                        continue
+
                     head_add = tuple(m["head_add"])
                     snake["body"].appendleft(head_add)
                     
@@ -154,6 +172,7 @@ class SnakeClient:
                         snake["body"].pop()
                         
                     snake["score"] = m.get("score", 0)
+                    snake["alive"] = m.get("alive", snake.get("alive", True))
                     
             elif mtype == MSG_GAME_OVER:
                 self.status = "FINISHED"

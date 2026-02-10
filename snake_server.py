@@ -269,6 +269,15 @@ class Room:
             del self.players[pid]
         
         # Initialize Snakes
+        spawn_x_min = max(2, MAP_WIDTH // 5)
+        spawn_x_max = min(MAP_WIDTH - 3, MAP_WIDTH - MAP_WIDTH // 5)
+        spawn_y_min = max(2, MAP_HEIGHT // 5)
+        spawn_y_max = min(MAP_HEIGHT - 3, MAP_HEIGHT - MAP_HEIGHT // 5)
+        if spawn_x_min > spawn_x_max:
+            spawn_x_min, spawn_x_max = 2, MAP_WIDTH - 3
+        if spawn_y_min > spawn_y_max:
+            spawn_y_min, spawn_y_max = 2, MAP_HEIGHT - 3
+
         spawn_info = []
         for p in self.players.values():
             if not p.alive:
@@ -279,8 +288,8 @@ class Room:
             # Find spawn spot
             found = False
             for _ in range(100):
-                sx = random.randint(2, MAP_WIDTH - 3)
-                sy = random.randint(2, MAP_HEIGHT - 3)
+                sx = random.randint(spawn_x_min, spawn_x_max)
+                sy = random.randint(spawn_y_min, spawn_y_max)
                 
                 # Check collision with others
                 collides = False
@@ -476,12 +485,21 @@ class Room:
                     bot = benched_bots[0]
                     bot.alive = True
                     bot.connected = True
+
+                    spawn_x_min = max(2, MAP_WIDTH // 5)
+                    spawn_x_max = min(MAP_WIDTH - 3, MAP_WIDTH - MAP_WIDTH // 5)
+                    spawn_y_min = max(2, MAP_HEIGHT // 5)
+                    spawn_y_max = min(MAP_HEIGHT - 3, MAP_HEIGHT - MAP_HEIGHT // 5)
+                    if spawn_x_min > spawn_x_max:
+                        spawn_x_min, spawn_x_max = 2, MAP_WIDTH - 3
+                    if spawn_y_min > spawn_y_max:
+                        spawn_y_min, spawn_y_max = 2, MAP_HEIGHT - 3
                     
                     # 生成蛇身
                     found = False
                     for _ in range(100):
-                        sx = random.randint(2, MAP_WIDTH - 3)
-                        sy = random.randint(2, MAP_HEIGHT - 3)
+                        sx = random.randint(spawn_x_min, spawn_x_max)
+                        sy = random.randint(spawn_y_min, spawn_y_max)
                         
                         # 檢查碰撞
                         collides = False
@@ -504,7 +522,9 @@ class Room:
                                 "tail_remove": None,
                                 "score": bot.score,
                                 "alive": True,
-                                "revived": True
+                                "revived": True,
+                                "name": bot.username,
+                                "body": start_body
                             })
                             
                             print(f"✅ Bot {bot.player_id} revived!")
@@ -535,10 +555,15 @@ class Room:
         ranks = []
         winner_id = None
         winner_name = None
+
+        participants = alive + dead
+        if participants:
+            # Winner is always the highest-scoring participant, even if everyone died.
+            winner = sorted(participants, key=lambda p: (-p.score, p.username, p.player_id))[0]
+            winner_id = winner.player_id
+            winner_name = winner.username
         
         for p in alive:
-            winner_id = p.player_id
-            winner_name = p.username
             ranks.append({"id": p.player_id, "rank": rank, "score": p.score})
             rank += 1
             
