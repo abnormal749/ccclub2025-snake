@@ -240,12 +240,12 @@ class Room:
             if not getattr(p, 'is_bot', False):
                 p.alive = True
 
-        # 根據真人數量調整 AI
+        # 規則：只要有人類參戰，開局固定保留 1 隻 AI。
         human_count = sum(1 for p in self.players.values() 
                           if not getattr(p, 'is_bot', False) and p.connected)
         bots = [p for p in self.players.values() if getattr(p, 'is_bot', False)]
         
-        target_bots = max(0, min(2, 2 - human_count))
+        target_bots = 1 if human_count > 0 else 0
         
         for i, bot in enumerate(bots):
             if i < target_bots:
@@ -340,16 +340,16 @@ class Room:
             if hasattr(p, 'is_bot') and p.is_bot:
                 p.get_move(self)
                 
-        # Check counts for Game Over logic
-        human_alive_count = sum(1 for p in alive_players if not getattr(p, 'is_bot', False))
-        human_total_count = sum(1 for p in self.players.values() if not getattr(p, 'is_bot', False))
-        
-        # Game Over Condition: 
-        # 結束條件：(存活者 <= 1) AND (沒有候補 AI 了)
-        # 候補 AI 定義：是 Bot，且不活著，且沒有被淘汰
+        # Game Over logic
+        alive_humans = sum(1 for p in alive_players if not getattr(p, 'is_bot', False))
+        alive_bots = sum(1 for p in alive_players if getattr(p, 'is_bot', False))
         benched_bots = [p for p in self.players.values() if getattr(p, 'is_bot', False) and not p.alive and not p.eliminated]
-        
-        if len(alive_players) <= 1 and len(benched_bots) == 0 and len(self.players) >= 2:
+
+        # Keep running only for AI-vs-AI2 handoff:
+        # no humans alive, exactly one AI alive, and one benched AI available.
+        keep_for_ai_showdown = (alive_humans == 0 and alive_bots == 1 and len(benched_bots) > 0)
+
+        if len(alive_players) <= 1 and len(self.players) >= 2 and not keep_for_ai_showdown:
             self.end_game()
             return
 
@@ -478,10 +478,18 @@ class Room:
             if not getattr(p, 'is_bot', False):
                 alive_humans = sum(1 for p in self.players.values() 
                                    if not getattr(p, 'is_bot', False) and p.alive)
+                alive_bots_after_death = sum(
+                    1
+                    for other in self.players.values()
+                    if getattr(other, 'is_bot', False)
+                    and other.alive
+                    and other.player_id not in dying_ids
+                )
                 benched_bots = [p for p in self.players.values() 
                                 if getattr(p, 'is_bot', False) and not p.alive and not p.eliminated]
                 
-                if alive_humans == 0 and benched_bots:
+                # 只有在人類全滅且仍有 AI 存活時，才補上 AI2。
+                if alive_humans == 0 and alive_bots_after_death > 0 and benched_bots:
                     bot = benched_bots[0]
                     bot.alive = True
                     bot.connected = True
