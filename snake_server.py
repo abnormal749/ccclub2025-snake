@@ -237,6 +237,7 @@ class Room:
         # 復活所有真人玩家
         for p in self.players.values():
             p.eliminated = False
+            p.score = 0
             if not getattr(p, 'is_bot', False):
                 p.alive = True
 
@@ -586,6 +587,10 @@ class Room:
             "winner_name": winner_name,
             "ended_tick": self.tick_id
         })
+
+        # Reset all scores for the next round.
+        for p in self.players.values():
+            p.score = 0
         
         self.status = "IDLE"
         self.host_id = None
