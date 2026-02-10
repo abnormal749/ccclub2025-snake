@@ -158,7 +158,14 @@ class SnakeClient:
             elif mtype == MSG_GAME_OVER:
                 self.status = "FINISHED"
                 self.ranks = data.get("ranks", [])
-                self.winner = data.get("winner_id")
+                winner_name = data.get("winner_name")
+                winner_id = data.get("winner_id")
+                if winner_name:
+                    self.winner = winner_name
+                elif winner_id and winner_id in self.snakes:
+                    self.winner = self.snakes[winner_id].get("name", winner_id)
+                else:
+                    self.winner = winner_id
                 
             elif mtype == MSG_ERROR:
                 print(f"Server Error: {data.get('code')}")
@@ -198,4 +205,3 @@ class SnakeClient:
                 "ranks": self.ranks,
                 "winner": self.winner
             }
-

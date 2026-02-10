@@ -30,8 +30,8 @@ class PlayerState:
         self.eliminated = False
 
 class BotPlayer(PlayerState):
-    def __init__(self, player_id, model):
-        super().__init__(player_id, "AI", None)
+    def __init__(self, player_id, model, username="AI"):
+        super().__init__(player_id, username, None)
         self.is_bot = True
         self.model = model
         self.current_step = 0
@@ -146,6 +146,16 @@ class Room:
         self.countdown_deadline = None
         self.pending_deaths = set()
 
+    def _is_benched_bot(self, player):
+        return getattr(player, 'is_bot', False) and (not player.alive) and (not player.eliminated)
+
+    def counted_players(self):
+        # "Standby" bots should not be counted as room players.
+        return [p for p in self.players.values() if not self._is_benched_bot(p)]
+
+    def counted_player_count(self):
+        return len(self.counted_players())
+
     async def _safe_send(self, ws, msg):
         try:
             await ws.send(msg)
@@ -158,7 +168,7 @@ class Room:
                 asyncio.create_task(self._safe_send(p.websocket, json.dumps(message)))
 
     def add_player(self, player):
-        if len(self.players) >= self.capacity:
+        if self.counted_player_count() >= self.capacity:
             return False, "ROOM_FULL"
         
         # Spectator logic: If running, they join as dead
@@ -179,6 +189,7 @@ class Room:
                 while len(active_bots) > 1:
                     bot = active_bots.pop()
                     bot.alive = False
+                    bot.connected = False
                     print(f"Bot {bot.player_id} benched, human joined")
 
         if self.status == "IDLE":
@@ -239,8 +250,10 @@ class Room:
         for i, bot in enumerate(bots):
             if i < target_bots:
                 bot.alive = True
+                bot.connected = True
             else:
                 bot.alive = False
+                bot.connected = False
 
         self.status = "RUNNING"
         self.tick_id = 0
@@ -462,6 +475,7 @@ class Room:
                 if alive_humans == 0 and benched_bots:
                     bot = benched_bots[0]
                     bot.alive = True
+                    bot.connected = True
                     
                     # 生成蛇身
                     found = False
@@ -520,9 +534,11 @@ class Room:
         rank = 1
         ranks = []
         winner_id = None
+        winner_name = None
         
         for p in alive:
             winner_id = p.player_id
+            winner_name = p.username
             ranks.append({"id": p.player_id, "rank": rank, "score": p.score})
             rank += 1
             
@@ -534,6 +550,7 @@ class Room:
             "t": MSG_GAME_OVER,
             "ranks": ranks,
             "winner_id": winner_id,
+            "winner_name": winner_name,
             "ended_tick": self.tick_id
         })
         
@@ -569,7 +586,8 @@ class SnakeServer:
             
             # Auto-add bots to EVERY Room
             for bot_idx in range(2):
-                bot = BotPlayer(f"bot_{i}_{bot_idx}", self.model)
+                bot_name = "AI" if bot_idx == 0 else "AI2"
+                bot = BotPlayer(f"bot_{i}_{bot_idx}", self.model, username=bot_name)
                 self.rooms[rid].add_player(bot)
         
         self.players = {} # ws -> PlayerState
@@ -602,7 +620,7 @@ class SnakeServer:
                         current_room = room
                         self.players[websocket] = player
                         
-                        plist = [{"id": p.player_id, "name": p.username} for p in room.players.values()]
+                        plist = [{"id": p.player_id, "name": p.username} for p in room.counted_players()]
                         resp = {
                             "t": MSG_JOIN_OK,
                             "room_id": rid,
@@ -650,7 +668,7 @@ class SnakeServer:
                 elif mtype == "start_request":
                     if current_room and current_room.host_id == player.player_id and current_room.status == "WAITING":
                         # Check min players
-                        if len(current_room.players) >= 2:
+                        if current_room.counted_player_count() >= 2:
                             current_room.start_game("MANUAL")
                         else:
                             # Allow 1 player start for debugging
@@ -677,11 +695,11 @@ class SnakeServer:
                     human_count = sum(1 for p in room.players.values() if not getattr(p, 'is_bot', False))
                     
                     if human_count > 0:
-                        if len(room.players) >= room.capacity:
+                        if room.counted_player_count() >= room.capacity:
                             room.start_game("REF_FULL")
                             # 讓玩家有準備時間
                             await asyncio.sleep(0.8)
-                        elif len(room.players) >= 2:
+                        elif room.counted_player_count() >= 2:
                             if room.countdown_deadline is None:
                                 room.countdown_deadline = time.time() + 5
                             elif time.time() >= room.countdown_deadline:
