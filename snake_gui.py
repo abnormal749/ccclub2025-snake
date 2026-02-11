@@ -9,6 +9,11 @@ import pygame
 import pygame_menu
 import socket
 import argparse
+import threading
+import time
+import asyncio
+import json
+import websockets
 from snake_client import SnakeClient
 from snake_protocol import *
 
@@ -21,6 +26,115 @@ SCREEN_HEIGHT = MAP_HEIGHT * CELL_SIZE
 BGCOLOR = (20, 20, 20)
 RED = (255, 0, 0)
 FPS = 60 # Client render FPS (server is 30)
+
+class RoomStatsPoller:
+    def __init__(self, room_count=ROOM_COUNT, poll_interval=2.0, timeout=1.0):
+        self.room_count = room_count
+        self.poll_interval = poll_interval
+        self.timeout = timeout
+        self.server_ip = "127.0.0.1"
+        self.thread = None
+        self.stop_event = threading.Event()
+        self.stats_lock = threading.Lock()
+        self.stats_by_room = {}
+
+    def start(self, server_ip):
+        self.server_ip = server_ip
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+
+    def set_server_ip(self, server_ip):
+        server_ip = (server_ip or "").strip()
+        if server_ip:
+            self.server_ip = server_ip
+
+    async def _fetch_room_stats_once(self, uri):
+        async with websockets.connect(uri, open_timeout=self.timeout, close_timeout=0.2) as ws:
+            await ws.send(json.dumps({"t": MSG_ROOM_STATS_REQ}))
+            raw = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
+            data = json.loads(raw)
+            if data.get("t") != MSG_ROOM_STATS:
+                return None
+            rooms = data.get("rooms", [])
+            if not isinstance(rooms, list):
+                return None
+            return rooms
+
+    def _worker(self):
+        while not self.stop_event.is_set():
+            uri = f"ws://{self.server_ip}:8765"
+            try:
+                rooms = asyncio.run(self._fetch_room_stats_once(uri))
+                if rooms is not None:
+                    next_stats = {}
+                    for room in rooms:
+                        rid = room.get("room_id")
+                        if rid:
+                            next_stats[rid] = room
+                    with self.stats_lock:
+                        self.stats_by_room = next_stats
+            except Exception:
+                pass
+
+            self.stop_event.wait(self.poll_interval)
+
+    def _format_label(self, room_number, stat):
+        if not stat:
+            return f"{room_number} (Loading)"
+
+        if (stat.get("available_slots", 0) or 0) <= 0:
+            return f"{room_number} (Full)"
+
+        display_players = stat.get("display_players")
+        if display_players is None:
+            display_players = stat.get("connected_players", 0)
+
+        if stat.get("status") == "RUNNING":
+            return f"{room_number} (Running {display_players})"
+        return f"{room_number} (Waiting {display_players})"
+
+    def get_room_items(self):
+        with self.stats_lock:
+            snapshot = dict(self.stats_by_room)
+
+        items = []
+        for i in range(1, self.room_count + 1):
+            room_id = f"room-{i}"
+            label = self._format_label(i, snapshot.get(room_id))
+            items.append((label, room_id))
+        return items
+
+def update_room_selector_items(room_selector, room_items):
+    selected_room = None
+    try:
+        selected_room = room_selector.get_value()[0][1]
+    except Exception:
+        pass
+
+    updated = False
+    try:
+        room_selector.update_items(room_items)
+        updated = True
+    except Exception:
+        try:
+            room_selector.set_items(room_items)
+            updated = True
+        except Exception:
+            return False
+
+    if updated and selected_room is not None:
+        selected_idx = next((i for i, item in enumerate(room_items) if item[1] == selected_room), 0)
+        try:
+            room_selector.set_value(selected_idx)
+        except Exception:
+            pass
+    return True
 
 class NetworkGame:
     def __init__(self, username, room_id, server_ip="127.0.0.1"):
@@ -215,16 +329,46 @@ def main():
     user_input = menu.add.text_input('Name: ', default='Player1')
     
     # Room Dropdown (Selector)
-    # Generate list of rooms "1"..."20"
-    room_items = [(f'{i}', f'room-{i}') for i in range(1, 21)]
+    room_poller = RoomStatsPoller(room_count=ROOM_COUNT, poll_interval=2.0, timeout=1.0)
+    room_poller.start(args.uri)
+    room_items = room_poller.get_room_items()
     room_selector = menu.add.selector('Room: ', room_items)
     
     ip_input = menu.add.text_input('Server IP: ', default=f'{args.uri}')
     
     menu.add.button('Join Game', lambda: start_client(room_selector.get_value(), user_input, ip_input))
     menu.add.button('Quit', pygame_menu.events.EXIT)
-    
-    menu.mainloop(surface)
+
+    clock = pygame.time.Clock()
+    last_refresh = 0.0
+    last_room_items = room_items
+
+    try:
+        while True:
+            events = pygame.event.get()
+            for event in events:
+                if event.type == pygame.QUIT:
+                    return
+
+            room_poller.set_server_ip(ip_input.get_value())
+
+            now = time.time()
+            if now - last_refresh >= 0.5:
+                current_items = room_poller.get_room_items()
+                if current_items != last_room_items:
+                    update_room_selector_items(room_selector, current_items)
+                    last_room_items = current_items
+                last_refresh = now
+
+            if menu.is_enabled():
+                menu.update(events)
+                menu.draw(surface)
+                pygame.display.flip()
+                clock.tick(30)
+            else:
+                break
+    finally:
+        room_poller.stop()
 
 if __name__ == '__main__':
     main()
