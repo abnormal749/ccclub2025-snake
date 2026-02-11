@@ -55,7 +55,8 @@
 
 - `room_id`：房間 ID（例如 `room-1`）
 - `status`：`IDLE / WAITING / RUNNING / FINISHED`
-- `connected_players`：目前連線中的玩家數（僅計入可計數玩家）
+- `connected_players`：目前連線中的玩家數（真人 + AI 全部分開計）
+- `display_players`：顯示用玩家數（若無真人，AI/AI2 合併顯示為 `1`；否則與 `connected_players` 相同）
 - `used_slots`：目前占用名額（與 server `ROOM_FULL` 判斷一致）
 - `capacity`：房間上限
 - `available_slots`：剩餘可加入名額

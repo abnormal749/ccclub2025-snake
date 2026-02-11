@@ -636,10 +636,27 @@ class SnakeServer:
             counted = room.counted_players()
             used_slots = len(counted)
             connected_players = sum(1 for p in counted if p.connected)
+            connected_humans = sum(
+                1
+                for p in counted
+                if p.connected and not getattr(p, 'is_bot', False)
+            )
+            connected_bots = sum(
+                1
+                for p in counted
+                if p.connected and getattr(p, 'is_bot', False)
+            )
+
+            # UI hint: when no humans are connected, show all bots as one.
+            if connected_humans == 0 and connected_bots > 0:
+                display_players = 1
+            else:
+                display_players = connected_players
             stats.append({
                 "room_id": rid,
                 "status": room.status,
                 "connected_players": connected_players,
+                "display_players": display_players,
                 "used_slots": used_slots,
                 "capacity": room.capacity,
                 "available_slots": max(0, room.capacity - used_slots)
