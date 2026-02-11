@@ -40,12 +40,6 @@ class BotPlayer(PlayerState):
         # Calculate state vector for AI
         head = self.body[0] if self.body else (0,0)
         w, h = MAP_WIDTH, MAP_HEIGHT
-        
-        # Helper: Check if point is dangerous (wall or body)
-        def is_danger(pt):
-            x, y = pt
-            if not (0 <= x < w and 0 <= y < h): return True
-            return (x, y) in room.occupied_set
 
         # Current direction
         dx, dy = self.direction
@@ -145,6 +139,33 @@ class Room:
         # Auto-start logic
         self.countdown_deadline = None
         self.pending_deaths = set()
+
+    def _get_spawn_bounds(self):
+        spawn_x_min = max(2, MAP_WIDTH // 5)
+        spawn_x_max = min(MAP_WIDTH - 3, MAP_WIDTH - MAP_WIDTH // 5)
+        spawn_y_min = max(2, MAP_HEIGHT // 5)
+        spawn_y_max = min(MAP_HEIGHT - 3, MAP_HEIGHT - MAP_HEIGHT // 5)
+        if spawn_x_min > spawn_x_max:
+            spawn_x_min, spawn_x_max = 2, MAP_WIDTH - 3
+        if spawn_y_min > spawn_y_max:
+            spawn_y_min, spawn_y_max = 2, MAP_HEIGHT - 3
+        return spawn_x_min, spawn_x_max, spawn_y_min, spawn_y_max
+
+    def _find_spawn_body(self):
+        spawn_x_min, spawn_x_max, spawn_y_min, spawn_y_max = self._get_spawn_bounds()
+        for _ in range(100):
+            sx = random.randint(spawn_x_min, spawn_x_max)
+            sy = random.randint(spawn_y_min, spawn_y_max)
+            if any((sx, sy) in other.body_set for other in self.players.values()):
+                continue
+            return [(sx, sy), (sx - 1, sy), (sx - 2, sy)]
+        return None
+
+    def _apply_spawn_body(self, player, start_body):
+        player.body = deque(start_body)
+        player.body_set = set(start_body)
+        player.direction = (1, 0)
+        self.occupied_set.update(start_body)
 
     def _is_benched_bot(self, player):
         return getattr(player, 'is_bot', False) and (not player.alive) and (not player.eliminated)
@@ -269,50 +290,25 @@ class Room:
             print(f"Pruning disconnected player {pid} from Room {self.room_id}")
             del self.players[pid]
         
-        # Initialize Snakes
-        spawn_x_min = max(2, MAP_WIDTH // 5)
-        spawn_x_max = min(MAP_WIDTH - 3, MAP_WIDTH - MAP_WIDTH // 5)
-        spawn_y_min = max(2, MAP_HEIGHT // 5)
-        spawn_y_max = min(MAP_HEIGHT - 3, MAP_HEIGHT - MAP_HEIGHT // 5)
-        if spawn_x_min > spawn_x_max:
-            spawn_x_min, spawn_x_max = 2, MAP_WIDTH - 3
-        if spawn_y_min > spawn_y_max:
-            spawn_y_min, spawn_y_max = 2, MAP_HEIGHT - 3
-
+        # Initialize snakes.
         spawn_info = []
         for p in self.players.values():
             if not p.alive:
                 continue
             p.body.clear()
             p.body_set.clear()
-            
-            # Find spawn spot
-            found = False
-            for _ in range(100):
-                sx = random.randint(spawn_x_min, spawn_x_max)
-                sy = random.randint(spawn_y_min, spawn_y_max)
-                
-                # Check collision with others
-                collides = False
-                for other in self.players.values():
-                    if (sx, sy) in other.body_set:
-                        collides = True
-                if not collides:
-                    start_body = [(sx, sy), (sx-1, sy), (sx-2, sy)]
-                    p.body = deque(start_body)
-                    p.body_set = set(start_body)
-                    p.direction = (1, 0) # Right
-                    self.occupied_set.update(start_body)
-                    found = True
-                    spawn_info.append({
-                        "id": p.player_id, 
-                        "name": p.username,
-                        "body": start_body
-                    })
-                    break
-            
-            if not found:
+
+            start_body = self._find_spawn_body()
+            if not start_body:
                 p.alive = False # Could not spawn
+                continue
+
+            self._apply_spawn_body(p, start_body)
+            spawn_info.append({
+                "id": p.player_id,
+                "name": p.username,
+                "body": start_body
+            })
         
         self.food = []
         self.spawn_food()
@@ -495,52 +491,24 @@ class Room:
                     bot.alive = True
                     bot.connected = True
 
-                    spawn_x_min = max(2, MAP_WIDTH // 5)
-                    spawn_x_max = min(MAP_WIDTH - 3, MAP_WIDTH - MAP_WIDTH // 5)
-                    spawn_y_min = max(2, MAP_HEIGHT // 5)
-                    spawn_y_max = min(MAP_HEIGHT - 3, MAP_HEIGHT - MAP_HEIGHT // 5)
-                    if spawn_x_min > spawn_x_max:
-                        spawn_x_min, spawn_x_max = 2, MAP_WIDTH - 3
-                    if spawn_y_min > spawn_y_max:
-                        spawn_y_min, spawn_y_max = 2, MAP_HEIGHT - 3
-                    
-                    # 生成蛇身
-                    found = False
-                    for _ in range(100):
-                        sx = random.randint(spawn_x_min, spawn_x_max)
-                        sy = random.randint(spawn_y_min, spawn_y_max)
-                        
-                        # 檢查碰撞
-                        collides = False
-                        for other in self.players.values():
-                            if (sx, sy) in other.body_set:
-                                collides = True
-                                break
-                        
-                        if not collides:
-                            start_body = [(sx, sy), (sx-1, sy), (sx-2, sy)]
-                            bot.body = deque(start_body)
-                            bot.body_set = set(start_body)
-                            bot.direction = (1, 0)
-                            self.occupied_set.update(start_body)
-                            
-                            # 發送 delta 通知 bot 復活
-                            moves.append({
-                                "id": bot.player_id,
-                                "head_add": start_body[0],
-                                "tail_remove": None,
-                                "score": bot.score,
-                                "alive": True,
-                                "revived": True,
-                                "name": bot.username,
-                                "body": start_body
-                            })
-                            
-                            print(f"✅ Bot {bot.player_id} revived!")
-                            found = True
-                            break
-                    
-                    if not found:
+                    start_body = self._find_spawn_body()
+                    if start_body:
+                        self._apply_spawn_body(bot, start_body)
+
+                        # 發送 delta 通知 bot 復活
+                        moves.append({
+                            "id": bot.player_id,
+                            "head_add": start_body[0],
+                            "tail_remove": None,
+                            "score": bot.score,
+                            "alive": True,
+                            "revived": True,
+                            "name": bot.username,
+                            "body": start_body
+                        })
+
+                        print(f"✅ Bot {bot.player_id} revived!")
+                    else:
                         print(f"Could not spawn bot {bot.player_id}")
             
         if food_eaten:

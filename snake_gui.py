@@ -1,13 +1,11 @@
-'''
-Function:
-    AI貪吃蛇 - Multiplayer Client (Refactored)
-    Connects to snake_server.py
-'''
-import sys
+"""
+AI Snake multiplayer GUI client.
+
+Connects to snake_server.py.
+"""
 import random
 import pygame
 import pygame_menu
-import socket
 import argparse
 import threading
 import time
@@ -26,8 +24,14 @@ SCREEN_HEIGHT = MAP_HEIGHT * CELL_SIZE
 BGCOLOR = (20, 20, 20)
 RED = (255, 0, 0)
 FPS = 60 # Client render FPS (server is 30)
+MENU_FPS = 30
+MENU_REFRESH_SEC = 0.5
+ROOM_STATS_POLL_SEC = 2.0
+ROOM_STATS_TIMEOUT_SEC = 1.0
 
 class RoomStatsPoller:
+    """Poll lightweight room stats API in a background thread."""
+
     def __init__(self, room_count=ROOM_COUNT, poll_interval=2.0, timeout=1.0):
         self.room_count = room_count
         self.poll_interval = poll_interval
@@ -80,6 +84,7 @@ class RoomStatsPoller:
                     with self.stats_lock:
                         self.stats_by_room = next_stats
             except Exception:
+                # Keep menu responsive even if backend is temporarily unreachable.
                 pass
 
             self.stop_event.wait(self.poll_interval)
@@ -111,6 +116,7 @@ class RoomStatsPoller:
         return items
 
 def update_room_selector_items(room_selector, room_items):
+    """Update selector options while preserving current selected room."""
     selected_room = None
     try:
         selected_room = room_selector.get_value()[0][1]
@@ -152,7 +158,6 @@ class NetworkGame:
         self.client.connect_and_start(uri, username, room_id)
         
         self.running = True
-        self.last_key = None
 
     def draw_grid(self):
         # Draw some subtle grid lines
@@ -328,8 +333,12 @@ def main():
     
     user_input = menu.add.text_input('Name: ', default='Player1')
     
-    # Room Dropdown (Selector)
-    room_poller = RoomStatsPoller(room_count=ROOM_COUNT, poll_interval=2.0, timeout=1.0)
+    # Room dropdown with live occupancy labels.
+    room_poller = RoomStatsPoller(
+        room_count=ROOM_COUNT,
+        poll_interval=ROOM_STATS_POLL_SEC,
+        timeout=ROOM_STATS_TIMEOUT_SEC
+    )
     room_poller.start(args.uri)
     room_items = room_poller.get_room_items()
     room_selector = menu.add.selector('Room: ', room_items)
@@ -353,7 +362,7 @@ def main():
             room_poller.set_server_ip(ip_input.get_value())
 
             now = time.time()
-            if now - last_refresh >= 0.5:
+            if now - last_refresh >= MENU_REFRESH_SEC:
                 current_items = room_poller.get_room_items()
                 if current_items != last_room_items:
                     update_room_selector_items(room_selector, current_items)
@@ -364,7 +373,7 @@ def main():
                 menu.update(events)
                 menu.draw(surface)
                 pygame.display.flip()
-                clock.tick(30)
+                clock.tick(MENU_FPS)
             else:
                 break
     finally:
