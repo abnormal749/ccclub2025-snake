@@ -60,3 +60,7 @@
 - `used_slots`：目前占用名額（與 server `ROOM_FULL` 判斷一致）
 - `capacity`：房間上限
 - `available_slots`：剩餘可加入名額
+
+## 其他程式碼
+- AI訓練部分：https://github.com/happyjimmy8964/SnakeAI_game_Interface
+- 網頁版前端：https://github.com/abnormal749/snake_ai_frontend
